@@ -38,16 +38,14 @@ process {
             $slide.NotesPage.Shapes | where { $_.PlaceholderFormat.Type -eq $ppPlaceholderBody } | where { $_.HasTextFrame } | where { $_.TextFrame.HasText } | foreach {
 
                 $lines = $_.TextFrame.TextRange.Text
-                $noteIndex = 0
-                $lines.Split($vbCr) | where { ![string]::IsNullOrWhiteSpace($_)  } | foreach { 
-                    $text = $_
-                    $output = "{0}\{1:000000}-{2:000000}.wav" -f $workDir, $slide.SlideIndex, $noteIndex++
-                    Write-Host ("page {0} : audio {1} : text {2} " -f $slide.SlideIndex, $output, $text)
 
-                    $synthesizer.SetOutputToWaveFile($output)
-                    $synthesizer.Speak($text)
-                    $audioInfo.audioFiles += $output
-                }                 
+                $noteIndex = 0
+                $output = "{0}\{1:000000}-{2:000000}.wav" -f $workDir, $slide.SlideIndex, $noteIndex++
+                Write-Host ("page {0} : audio {1} : text {2} " -f $slide.SlideIndex, $output, $lines)
+                $synthesizer.SetOutputToWaveFile($output)
+                $synthesizer.Speak($lines)
+                $audioInfo.audioFiles += $output
+
             }
             $audioOutputs += $audioInfo
         }
@@ -70,15 +68,16 @@ process {
         $pres.Save()
 
         Write-Host "========== save files and export video ========"        
-        $videofile = "$($workFile).mp4"
+        $videofile = "$($pptxFile).mp4"
         $pres.CreateVideo($videofile, $false, 5, 720, 30, 85)
         $videofile
 
-        while( $pres.CreateVideoStatus -eq $ppMediaTaskStatusInProgress)
+        while( $pres.CreateVideoStatus -ne $ppMediaTaskStatusDone)
         {
-            Write-Host "Waiting for media output"
+            Write-Host "Waiting for media output $($pres.CreateVideoStatus)"
             Start-Sleep -Seconds 5
         }
+        $pres.Save()
     }
     finally {
         $pres.Close()
