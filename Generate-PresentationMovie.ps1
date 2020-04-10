@@ -4,6 +4,7 @@
 )
 
 begin {
+    $pptxFile = [System.IO.Path]::GetFullPath($pptxFile)
     $workDir = "{0}\{1:yyyyMMdd-HHmmss}" -f [System.IO.Path]::GetDirectoryName($pptxFile), [DateTime]::Now
     $workFile = "{0}\{1}" -f $workDir, [System.IO.Path]::GetFileName($pptxFile)
     $d = [System.IO.Directory]::CreateDirectory($workDir)
