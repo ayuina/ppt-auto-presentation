@@ -1,97 +1,156 @@
 ﻿param(
-    [Parameter(Mandatory=$True)]
-    [string]$pptxFile
+    [Parameter(Mandatory=$true)]
+    [string]$pptxFile,
+    [Parameter(Mandatory=$true)]
+    [string]$configFile
 )
 
-begin {
-    $pptxFile = [System.IO.Path]::GetFullPath($pptxFile)
-    $workDir = "{0}\{1:yyyyMMdd-HHmmss}" -f [System.IO.Path]::GetDirectoryName($pptxFile), [DateTime]::Now
-    $workFile = "{0}\{1}" -f $workDir, [System.IO.Path]::GetFileName($pptxFile)
-    $d = [System.IO.Directory]::CreateDirectory($workDir)
-    [System.IO.File]::Copy($pptxFile, $workFile)
-    
-    $app = New-Object -ComObject "PowerPoint.Application"
+$InformationPreference = "Continue"
+. $configFile
+
+function Main()
+{
+    $workDirPath = "{0}/work/{1:yyyyMMdd-HHmmss}-{2}" -f (Get-Location), [DateTime]::Now, [System.IO.Path]::GetFileNameWithoutExtension($pptxFile)
+    Write-Information "Creating working directory at $workDirPath"
+    $workDir = [System.IO.Directory]::CreateDirectory($workDirPath)
+
+    $sourceFilePath = Join-Path -Path $workDir.FullName -ChildPath "source.pptx"
+    $original = Get-Item $pptxFile
+    $source = $original.CopyTo($sourceFilePath, $true)
+
+    Generate-Movie $source
+}
+
+function Generate-Movie ([System.IO.FileInfo]$sourceFile)
+{
+    $workDir = $sourceFile.Directory
+    Write-Information "processing on $workDir ..."
+    $outputFile = Join-Path -Path $workDir.FullName -ChildPath "output.mp4"
+
+    $ppapp = New-Object -ComObject "PowerPoint.Application"
+    try 
+    {
+        $presentation = $ppapp.Presentations.Open($sourceFile.FullName)
+        try
+        {
+            # $context = ExportNotes -presentation $presentation
+
+            # $context | foreach {
+            #     $_['audio'] = Generate-Audio -workdir $workDir -page $_.page -text $_.text
+            # }
+
+            # $context | foreach {
+            #     AddAudioAsAnimationEffect -presentation $presentation -page $_.page -audio $_.audio
+            # }
+
+            ExportNotes -presentation $presentation `
+            | foreach {
+                $_['audio'] = Generate-Audio -workdir $workDir -page $_.page -text $_.text
+                Write-Output $_
+            } `
+            | foreach {
+                AddAudioAsAnimationEffect -presentation $presentation -page $_.page -audio $_.audio
+            }
+
+            ExportTo-Movie -presentation $presentation -outputFile $outputFile
+
+        }
+        finally
+        {
+            $presentation.Close()
+        }
+    }
+    finally 
+    {
+        $ppapp.Quit()
+    }
+}
+
+function ExportNotes($presentation)
+{
+    $presentation.Slides | where { $_.HasNotesPage } | foreach {
+        ExportNoteFromSlide $_
+    }
+}
+
+function ExportNoteFromSlide($slide)
+{
+    Write-Information "exporting note text from page $($slide.SlideIndex) ..."
+
     $ppPlaceholderBody = 2
+
+    $slide.NotesPage.Shapes `
+    | where { $_.PlaceholderFormat.Type -eq $ppPlaceholderBody } `
+    | where { $_.HasTextFrame } `
+    | where { $_.TextFrame.HasText } `
+    | foreach {
+        $lines = $_.TextFrame.TextRange.Text
+        Write-Output @{ page = $slide.SlideIndex; text = $lines }
+    }
+}
+
+function Generate-Audio([System.IO.DirectoryInfo]$workDir, [int]$page, [string]$text)
+{
+    Write-Information "generationg audio for page $($page) ..."
+
+    $ssmlOutput = Join-Path -Path $workDir.FullName -ChildPath ("{0:0000}.ssml" -f $page)
+    $ssml = [xml]$config.ssmlBase.Clone()
+    $ssml.speak.voice.InnerText = $text
+    $ssml.Save( $ssmlOutput )
+
+    $audioOutput = Join-Path -Path $workDir.FullName -ChildPath ("{0:0000}.{1}" -f $page, $config.speech.audioExtension)
+    Invoke-RestMethod -Uri $config.speech.endpoint -Method Post `
+        -Headers $config.speech.headers `
+        -Body $ssml.OuterXml `
+        -OutFile $audioOutput
+    
+    return $audioOutput
+}
+
+function AddAudioAsAnimationEffect($presentation, $page, $audio)
+{
+    write-Information "adding audio as animation effect for page $($page) ..."
+
+    $slide = $presentation.Slides[$page]
+
+    #https://learn.microsoft.com/ja-jp/office/vba/api/powerpoint.shapes.addmediaobject2
+    $linkToFile = $true
+    $saveWithDocument = $false
+    $left = 10
+    $top = 10
+    $mo = $slide.Shapes.AddMediaObject2($audio, $linkToFile, $saveWithDocument, $left, $top)
+
+    #https://learn.microsoft.com/ja-jp/office/vba/api/powerpoint.sequence.addeffect
     $msoAnimEffectMediaPlay = 83
+    $msoAnimLevelNone = 0
     $msoAnimTriggerAfterPrevious = 3
+    $eff = $slide.TimeLine.MainSequence.AddEffect($mo, $msoAnimEffectMediaPlay, $msoAnimLevelNone, $msoAnimTriggerAfterPrevious)
+    $eff.EffectInformation.PlaySettings.HideWhileNotPlaying = $true
+
+    $presentation.Save()
+}
+
+function ExportTo-Movie($presentation, $outputFile)
+{
+    write-Information "output to video : $outputFile ..."
+
+    #https://learn.microsoft.com/ja-jp/office/vba/api/powerpoint.presentation.createvideo
+    $useTimeingAndNaration = $false
+    $defaultSlideDuration = 5
+    $verticalResolution = 720
+    $framePerSecoond = 30
+    $quality = 80
+    $presentation.CreateVideo($outputFile, $useTimeingAndNaration, $defaultSlideDuration, $verticalResolution, $framePerSecoond, $quality)
+
     $ppMediaTaskStatusInProgress = 1
     $ppMediaTaskStatusDone = 3
-
-    $ppSaveAsMP4 = 39
-    $vbCr = [char]13
-
-    Add-Type –AssemblyName System.Speech
-    $synthesizer = New-Object –TypeName System.Speech.Synthesis.SpeechSynthesizer
-}
-
-process {
-    
-    $pres = $app.Presentations.Open($workFile)
-    try {
-
-        Write-Host "========== generating audio from note text ========"        
-        $audioOutputs = @()
-        $pres.Slides | where { $_.HasNotesPage } | foreach {
-            
-            $slide = $_
-            $audioInfo = @{ page = $slide.SlideIndex; audioFiles = @() }
-
-            $slide.NotesPage.Shapes | where { $_.PlaceholderFormat.Type -eq $ppPlaceholderBody } | where { $_.HasTextFrame } | where { $_.TextFrame.HasText } | foreach {
-
-                $lines = $_.TextFrame.TextRange.Text
-
-                $noteIndex = 0
-                $output = "{0}\{1:000000}-{2:000000}.wav" -f $workDir, $slide.SlideIndex, $noteIndex++
-                Write-Host ("page {0} : audio {1} : text {2} " -f $slide.SlideIndex, $output, $lines)
-                $synthesizer.SetOutputToWaveFile($output)
-                $synthesizer.Speak($lines)
-                $audioInfo.audioFiles += $output
-
-            }
-            $audioOutputs += $audioInfo
-        }
-        $synthesizer.Dispose()
-
-        Write-Host "========== adding audio as animation effect ========"        
-        $audioOutputs | foreach {
-            $slide = $pres.Slides[$_.page]
-            for($i = 0; $i -lt $_.audioFiles.Length; $i++) {
-                Write-Host ("processing page {0}, audio file {1}" -f $_.page, $_.audioFiles[$i] )
-                $mo = $slide.Shapes.AddMediaObject2($_.audioFiles[$i], $true, $false, 10, 10)
-                $eff = $slide.TimeLine.MainSequence.AddEffect($mo, $msoAnimEffectMediaPlay,0, $msoAnimTriggerAfterPrevious)
-                $eff.MoveTo( $i + 1 )
-                $eff.EffectInformation.PlaySettings.HideWhileNotPlaying = $true
-            }
-              
-            $_.audioFiles | foreach {
-            }
-        }
-        $pres.Save()
-
-        Write-Host "========== save files and export video ========"        
-        $videofile = "$($pptxFile).mp4"
-        $pres.CreateVideo($videofile, $false, 5, 720, 30, 85)
-        $videofile
-
-        while( $pres.CreateVideoStatus -ne $ppMediaTaskStatusDone)
-        {
-            Write-Host "Waiting for media output $($pres.CreateVideoStatus)"
-            Start-Sleep -Seconds 5
-        }
-        $pres.Save()
-    }
-    finally {
-        $pres.Close()
+    while( $presentation.CreateVideoStatus -ne $ppMediaTaskStatusDone)
+    {
+        Write-Host "Waiting for media output $($pres.CreateVideoStatus)"
+        Start-Sleep -Seconds 5
     }
 
-
+    $presentation.Save()
 }
 
-end {
-    $app.Quit()
-}
-
-#https://docs.microsoft.com/en-us/office/vba/api/powerpoint.ppplaceholdertype
-#http://www.pptfaq.com/FAQ00481_Export_the_notes_text_of_a_presentation.htm
-#https://answers.microsoft.com/en-us/msoffice/forum/all/how-do-i-add-an-mp3-narration-file-with-timing/1a670b64-4b0c-4bf3-9bd2-4d162ce30500
-#https://answers.microsoft.com/en-us/msoffice/forum/all/using-vba-to-insert-and-automatically-play-audio/a56ac636-2a83-4c37-88d1-068ef01b52b9
+Main
