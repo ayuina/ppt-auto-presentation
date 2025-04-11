@@ -10,8 +10,8 @@ $InformationPreference = "Continue"
 
 function Main()
 {
-    Write-Information "Creating working directory"
-    $workDirPath = "./work/{0:yyyyMMdd-HHmmss}-{1}" -f [DateTime]::Now, [System.IO.Path]::GetFileNameWithoutExtension($pptxFile)
+    $workDirPath = "{0}/work/{1:yyyyMMdd-HHmmss}-{2}" -f (Get-Location), [DateTime]::Now, [System.IO.Path]::GetFileNameWithoutExtension($pptxFile)
+    Write-Information "Creating working directory at $workDirPath"
     $workDir = [System.IO.Directory]::CreateDirectory($workDirPath)
 
     $sourceFilePath = Join-Path -Path $workDir.FullName -ChildPath "source.pptx"
