@@ -1,0 +1,17 @@
+
+GET {{$dotenv SPEECH_API_URL}}/cognitiveservices/voices/list HTTP/1.1
+Ocp-Apim-Subscription-Key: {{$dotenv SPEECH_API_KEY}}
+
+###
+
+POST {{$dotenv SPEECH_API_URL}}/cognitiveservices/v1 HTTP/1.1
+X-Microsoft-OutputFormat: riff-24khz-16bit-mono-pcm
+Content-Type: application/ssml+xml
+Ocp-Apim-Subscription-Key: {{$dotenv SPEECH_API_KEY}}
+
+<speak version='1.0' xml:lang='ja-JP'>
+    <voice name='ja-JP-Nanami:DragonHDLatestNeural'>
+        みなさんこんにちは！
+        本日は Power Point を使用した動画の作成方法についてご紹介します。
+    </voice>
+</speak>
